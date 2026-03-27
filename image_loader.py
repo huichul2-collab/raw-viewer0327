@@ -3,8 +3,25 @@ RAW 이미지 파일 로딩 및 포맷 변환 모듈
 지원 포맷: YUV420p, NV12, NV21, RGB24, RGB10, RGB12
 """
 
+import re
 import numpy as np
 import cv2
+
+
+def parse_resolution_from_filename(filename: str):
+    """
+    파일명에서 'WxH' 또는 'WXH' 패턴을 찾아 (width, height) 반환.
+    파싱 실패 시 (None, None) 반환.
+
+    예시:
+        'video_test_600x480_8bit.yuv'   → (600, 480)
+        'sample_1920x1080_nv12.raw'     → (1920, 1080)
+        'aaaa_bbb_ccc_600x480_aa.yuv'   → (600, 480)
+    """
+    match = re.search(r'(\d+)[xX](\d+)', filename)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return None, None
 
 
 def load_raw(file_path: str, width: int, height: int, fmt: str) -> np.ndarray:

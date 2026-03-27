@@ -15,7 +15,7 @@ from PyQt5.QtGui import QImage, QPixmap, QKeySequence
 
 import numpy as np
 
-from image_loader import load_raw
+from image_loader import load_raw, parse_resolution_from_filename
 
 
 FORMATS = [
@@ -82,6 +82,8 @@ class RawViewerWindow(QMainWindow):
         self._file_path = ""
         self._zoom = 1.0
         self._bgr_array = None
+
+        self.setAcceptDrops(True)
 
         self._build_menu()
         self._build_ui()
@@ -195,7 +197,8 @@ class RawViewerWindow(QMainWindow):
         hint = QLabel(
             "숫자키 1~6: 고정 줌\n"
             "휠: 줌 인/아웃\n"
-            "Ctrl+O: 파일 열기"
+            "Ctrl+O: 파일 열기\n"
+            "파일 드래그&드롭 지원"
         )
         hint.setStyleSheet("color: #999; font-size: 10px;")
         hint.setWordWrap(True)
@@ -238,8 +241,28 @@ class RawViewerWindow(QMainWindow):
         )
         if not path:
             return
+        self._apply_file(path)
+
+    def _apply_file(self, path: str):
+        """파일 경로를 받아 해상도 파싱 → UI 업데이트 → 렌더링."""
         self._file_path = path
+        filename = os.path.basename(path)
+        w, h = parse_resolution_from_filename(filename)
+        if w is not None:
+            self._width_spin.setValue(w)
+            self._height_spin.setValue(h)
         self._load_and_render()
+
+    # ── 드래그 앤 드롭 ────────────────────────────────────────────────────────
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls:
+            self._apply_file(urls[0].toLocalFile())
 
     # ── 로딩 + 렌더링 ─────────────────────────────────────────────────────────
 

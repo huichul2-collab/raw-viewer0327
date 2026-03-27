@@ -25,7 +25,24 @@ FORMATS = [
     "RGB24",
     "RGB10",
     "RGB12",
+    "MIPI_RAW8",
+    "MIPI_RAW10",
+    "MIPI_RAW12",
+    "MIPI_RAW14",
 ]
+
+MIPI_FORMATS = {"MIPI_RAW8", "MIPI_RAW10", "MIPI_RAW12", "MIPI_RAW14"}
+
+BAYER_PATTERNS = ["RGGB", "GRBG", "GBRG", "BGGR"]
+
+# 확장자 → 자동 포맷 매핑
+EXT_FORMAT_MAP = {
+    ".raw10": "MIPI_RAW10",
+    ".raw12": "MIPI_RAW12",
+    ".raw14": "MIPI_RAW14",
+    ".raw8":  "MIPI_RAW8",
+    ".mipi":  "MIPI_RAW10",
+}
 
 ZOOM_PRESETS = {
     Qt.Key_1: 0.50,
@@ -161,7 +178,17 @@ class RawViewerWindow(QMainWindow):
         layout.addWidget(QLabel("Format"))
         self._fmt_combo = QComboBox()
         self._fmt_combo.addItems(FORMATS)
+        self._fmt_combo.currentTextChanged.connect(self._on_format_changed)
         layout.addWidget(self._fmt_combo)
+
+        # Bayer Pattern (MIPI 포맷 선택 시 활성화)
+        self._bayer_label = QLabel("Bayer Pattern")
+        self._bayer_combo = QComboBox()
+        self._bayer_combo.addItems(BAYER_PATTERNS)
+        layout.addWidget(self._bayer_label)
+        layout.addWidget(self._bayer_combo)
+        self._bayer_label.setVisible(False)
+        self._bayer_combo.setVisible(False)
 
         # Zoom 표시
         layout.addSpacing(10)
@@ -229,16 +256,30 @@ class RawViewerWindow(QMainWindow):
 
     # ── 파일 열기 ─────────────────────────────────────────────────────────────
 
+    def _on_format_changed(self, fmt: str):
+        is_mipi = fmt in MIPI_FORMATS
+        self._bayer_label.setVisible(is_mipi)
+        self._bayer_combo.setVisible(is_mipi)
+
     def _open_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "RAW 파일 열기",
             "",
-            "RAW Files (*.raw *.bin *.yuv *.rgb *.data);;All Files (*)",
+            "RAW Files (*.raw *.raw8 *.raw10 *.raw12 *.raw14 *.mipi *.bin *.yuv *.rgb *.data);;All Files (*)",
         )
         if not path:
             return
         self._file_path = path
+
+        # 확장자로 포맷 자동 선택
+        ext = os.path.splitext(path)[1].lower()
+        if ext in EXT_FORMAT_MAP:
+            auto_fmt = EXT_FORMAT_MAP[ext]
+            idx = self._fmt_combo.findText(auto_fmt)
+            if idx >= 0:
+                self._fmt_combo.setCurrentIndex(idx)
+
         self._load_and_render()
 
     # ── 로딩 + 렌더링 ─────────────────────────────────────────────────────────
@@ -248,12 +289,13 @@ class RawViewerWindow(QMainWindow):
             QMessageBox.information(self, "안내", "먼저 RAW 파일을 선택해 주세요.")
             return
 
-        w   = self._width_spin.value()
-        h   = self._height_spin.value()
-        fmt = self._fmt_combo.currentText()
+        w       = self._width_spin.value()
+        h       = self._height_spin.value()
+        fmt     = self._fmt_combo.currentText()
+        bayer   = self._bayer_combo.currentText()
 
         try:
-            bgr = load_raw(self._file_path, w, h, fmt)
+            bgr = load_raw(self._file_path, w, h, fmt, bayer)
         except Exception as e:
             QMessageBox.critical(self, "로딩 오류", str(e))
             return

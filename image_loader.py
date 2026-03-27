@@ -3,13 +3,15 @@ RAW 이미지 파일 로딩 및 포맷 변환 모듈
 지원 포맷: YUV420p, NV12, NV21, RGB24, RGB10, RGB12
 """
 
+import os
+
 import numpy as np
 import cv2
 
 
 def load_raw(file_path: str, width: int, height: int, fmt: str) -> np.ndarray:
     """
-    RAW 파일을 읽어 RGB888 numpy 배열로 반환.
+    RAW 파일을 읽어 BGR888 numpy 배열로 반환.
 
     Parameters
     ----------
@@ -104,7 +106,6 @@ def _rgb10_to_bgr(data: bytes, width: int, height: int) -> np.ndarray:
     각 채널 uint16로 읽은 뒤 >> 2 하여 8bit 변환
     """
     arr = np.frombuffer(data, dtype=np.uint16).reshape((height, width, 3))
-    # 상위 10bit → 8bit: >> 2
     arr8 = (arr >> 2).astype(np.uint8)
     bgr = cv2.cvtColor(arr8, cv2.COLOR_RGB2BGR)
     return bgr
@@ -116,7 +117,43 @@ def _rgb12_to_bgr(data: bytes, width: int, height: int) -> np.ndarray:
     각 채널 uint16로 읽은 뒤 >> 4 하여 8bit 변환
     """
     arr = np.frombuffer(data, dtype=np.uint16).reshape((height, width, 3))
-    # 상위 12bit → 8bit: >> 4
     arr8 = (arr >> 4).astype(np.uint8)
     bgr = cv2.cvtColor(arr8, cv2.COLOR_RGB2BGR)
     return bgr
+
+
+# ── 감마 보정 ────────────────────────────────────────────────────────────────
+
+def apply_gamma(bgr: np.ndarray, gamma: float) -> np.ndarray:
+    """
+    BGR 배열에 감마 보정을 적용한 새 배열 반환.
+    공식: output = (input / 255) ^ (1 / gamma) * 255
+
+    Parameters
+    ----------
+    bgr   : np.ndarray  shape=(H, W, 3), dtype=uint8
+    gamma : float       감마 값 (0.1 ~ 3.0). 1.0이면 원본 반환.
+    """
+    if abs(gamma - 1.0) < 1e-9:
+        return bgr
+    inv_gamma = 1.0 / gamma
+    lut = np.array(
+        [((i / 255.0) ** inv_gamma) * 255 for i in range(256)],
+        dtype=np.uint8,
+    )
+    return cv2.LUT(bgr, lut)
+
+
+# ── 파일 확장자 → 포맷 추정 ──────────────────────────────────────────────────
+
+def detect_format_from_ext(filename: str) -> str | None:
+    """
+    파일 확장자로부터 포맷 문자열을 추정해 반환.
+    인식하지 못하면 None 반환.
+    """
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in ('.yuv', '.nv12', '.nv21'):
+        return 'YUV420p'
+    elif ext in ('.rgb', '.raw'):
+        return 'RGB24'
+    return None

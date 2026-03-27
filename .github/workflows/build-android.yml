@@ -1,0 +1,105 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'android/**'
+      - '.github/workflows/build-android.yml'
+  workflow_dispatch:   # 수동 실행 버튼
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            build-essential git unzip \
+            openjdk-17-jdk \
+            libffi-dev libssl-dev libsqlite3-dev \
+            zlib1g-dev libbz2-dev liblzma-dev \
+            autoconf libtool pkg-config \
+            libltdl-dev cmake ninja-build \
+            ccache
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: android-build-${{ github.ref }}
+
+      - name: Cache Buildozer global directory
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildozer
+          key: buildozer-global-${{ hashFiles('android/buildozer.spec') }}-v1
+          restore-keys: |
+            buildozer-global-
+
+      - name: Cache Android SDK/NDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.android
+            ~/android-sdk
+          key: android-sdk-ndk-${{ hashFiles('android/buildozer.spec') }}-v1
+          restore-keys: |
+            android-sdk-ndk-
+
+      - name: Install Buildozer and Cython
+        run: |
+          pip install --upgrade pip wheel
+          pip install buildozer cython==0.29.33
+
+      - name: Accept Android SDK licenses
+        run: |
+          mkdir -p ~/.android
+          echo "count=0" > ~/.android/repositories.cfg
+          yes | sdkmanager --licenses 2>/dev/null || true
+        continue-on-error: true
+
+      - name: Build APK (debug)
+        working-directory: android
+        env:
+          ANDROIDAPI: "33"
+          ANDROIDMINAPI: "21"
+          PATH: "/usr/lib/ccache:$PATH"
+        run: |
+          buildozer android debug 2>&1 | tee build.log
+          # 마지막 100줄만 다시 출력 (요약)
+          echo "--- Build log tail ---"
+          tail -100 build.log
+
+      - name: Locate APK
+        id: find_apk
+        working-directory: android
+        run: |
+          APK=$(find bin -name "*.apk" | head -1)
+          echo "apk_path=${APK}" >> "$GITHUB_OUTPUT"
+          echo "Found APK: ${APK}"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RawViewer-debug-${{ github.run_number }}.apk
+          path: android/bin/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.run_number }}
+          path: android/build.log
+          retention-days: 7

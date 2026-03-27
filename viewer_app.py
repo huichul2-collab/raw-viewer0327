@@ -8,14 +8,14 @@ from PyQt5.QtWidgets import (
     QLabel, QLineEdit, QComboBox, QPushButton,
     QScrollArea, QStatusBar, QMenuBar, QAction,
     QFileDialog, QMessageBox, QSizePolicy, QFrame,
-    QSpinBox,
+    QSpinBox, QCheckBox, QGroupBox,
 )
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QImage, QPixmap, QKeySequence
 
 import numpy as np
 
-from image_loader import load_raw
+from image_loader import load_raw, load_mipi_image
 
 
 FORMATS = [
@@ -82,6 +82,7 @@ class RawViewerWindow(QMainWindow):
         self._file_path = ""
         self._zoom = 1.0
         self._bgr_array = None
+        self._mipi_demosaic = False  # False=Raw Bayer, True=Demosaic→RGB
 
         self._build_menu()
         self._build_ui()
@@ -138,7 +139,7 @@ class RawViewerWindow(QMainWindow):
     def _build_side_panel(self) -> QWidget:
         panel = QFrame()
         panel.setFrameShape(QFrame.StyledPanel)
-        panel.setFixedWidth(200)
+        panel.setFixedWidth(230)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 10, 8, 10)
         layout.setSpacing(8)
@@ -163,8 +164,53 @@ class RawViewerWindow(QMainWindow):
         self._fmt_combo.addItems(FORMATS)
         layout.addWidget(self._fmt_combo)
 
+        # ── MIPI Override ─────────────────────────────────────────────────
+        mipi_group = QGroupBox("MIPI Override")
+        mipi_layout = QVBoxLayout(mipi_group)
+        mipi_layout.setContentsMargins(6, 8, 6, 8)
+        mipi_layout.setSpacing(6)
+
+        self._mipi_override_cb = QCheckBox("MIPI로 강제 해석")
+        self._mipi_override_cb.setChecked(False)
+        self._mipi_override_cb.stateChanged.connect(self._on_mipi_override_changed)
+        mipi_layout.addWidget(self._mipi_override_cb)
+
+        depth_row = QHBoxLayout()
+        depth_row.addWidget(QLabel("Bit depth:"))
+        self._mipi_depth_combo = QComboBox()
+        self._mipi_depth_combo.addItems(["MIPI_RAW8", "MIPI_RAW10", "MIPI_RAW12", "MIPI_RAW14"])
+        self._mipi_depth_combo.setCurrentText("MIPI_RAW10")
+        depth_row.addWidget(self._mipi_depth_combo)
+        mipi_layout.addLayout(depth_row)
+
+        bayer_row = QHBoxLayout()
+        bayer_row.addWidget(QLabel("Bayer:"))
+        self._mipi_bayer_combo = QComboBox()
+        self._mipi_bayer_combo.addItems(["RGGB", "GRBG", "GBRG", "BGGR"])
+        bayer_row.addWidget(self._mipi_bayer_combo)
+        mipi_layout.addLayout(bayer_row)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(4)
+        self._btn_raw_bayer = QPushButton("Raw Bayer")
+        self._btn_raw_bayer.setCheckable(True)
+        self._btn_raw_bayer.setChecked(True)
+        self._btn_raw_bayer.clicked.connect(lambda: self._set_mipi_demosaic(False))
+        self._btn_demosaic = QPushButton("Demosaic")
+        self._btn_demosaic.setCheckable(True)
+        self._btn_demosaic.setChecked(False)
+        self._btn_demosaic.clicked.connect(lambda: self._set_mipi_demosaic(True))
+        btn_row.addWidget(self._btn_raw_bayer)
+        btn_row.addWidget(self._btn_demosaic)
+        mipi_layout.addLayout(btn_row)
+
+        layout.addWidget(mipi_group)
+
+        # 초기 상태: override OFF → MIPI 컨트롤 비활성
+        self._set_mipi_controls_enabled(False)
+
         # Zoom 표시
-        layout.addSpacing(10)
+        layout.addSpacing(6)
         self._zoom_label = QLabel("Zoom: 100%")
         self._zoom_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._zoom_label)
@@ -183,7 +229,7 @@ class RawViewerWindow(QMainWindow):
         layout.addLayout(zoom_row)
 
         # Load 버튼
-        layout.addSpacing(10)
+        layout.addSpacing(6)
         self._load_btn = QPushButton("Load / Render")
         self._load_btn.setFixedHeight(36)
         self._load_btn.clicked.connect(self._load_and_render)
@@ -203,6 +249,25 @@ class RawViewerWindow(QMainWindow):
 
         return panel
 
+    def _set_mipi_controls_enabled(self, enabled: bool):
+        self._mipi_depth_combo.setEnabled(enabled)
+        self._mipi_bayer_combo.setEnabled(enabled)
+        self._btn_raw_bayer.setEnabled(enabled)
+        self._btn_demosaic.setEnabled(enabled)
+
+    def _on_mipi_override_changed(self, state):
+        enabled = (state == Qt.Checked)
+        self._set_mipi_controls_enabled(enabled)
+        if self._file_path:
+            self._load_and_render()
+
+    def _set_mipi_demosaic(self, demosaic: bool):
+        self._mipi_demosaic = demosaic
+        self._btn_raw_bayer.setChecked(not demosaic)
+        self._btn_demosaic.setChecked(demosaic)
+        if self._file_path:
+            self._load_and_render()
+
     # ── 상태바 ────────────────────────────────────────────────────────────────
 
     def _build_statusbar(self):
@@ -219,7 +284,12 @@ class RawViewerWindow(QMainWindow):
     def _update_status(self):
         fname = os.path.basename(self._file_path) if self._file_path else "—"
         self._status_file.setText(f"파일: {fname}")
-        self._status_fmt.setText(f"포맷: {self._fmt_combo.currentText()}")
+        if self._mipi_override_cb.isChecked():
+            mode = "Demosaic" if self._mipi_demosaic else "Raw Bayer"
+            fmt_str = f"{self._mipi_depth_combo.currentText()} [{self._mipi_bayer_combo.currentText()}] {mode}"
+        else:
+            fmt_str = self._fmt_combo.currentText()
+        self._status_fmt.setText(f"포맷: {fmt_str}")
         w = self._width_spin.value()
         h = self._height_spin.value()
         self._status_res.setText(f"해상도: {w}×{h}")
@@ -248,12 +318,17 @@ class RawViewerWindow(QMainWindow):
             QMessageBox.information(self, "안내", "먼저 RAW 파일을 선택해 주세요.")
             return
 
-        w   = self._width_spin.value()
-        h   = self._height_spin.value()
-        fmt = self._fmt_combo.currentText()
+        w = self._width_spin.value()
+        h = self._height_spin.value()
 
         try:
-            bgr = load_raw(self._file_path, w, h, fmt)
+            if self._mipi_override_cb.isChecked():
+                mipi_fmt = self._mipi_depth_combo.currentText()
+                bayer    = self._mipi_bayer_combo.currentText()
+                bgr = load_mipi_image(self._file_path, w, h, mipi_fmt, bayer, self._mipi_demosaic)
+            else:
+                fmt = self._fmt_combo.currentText()
+                bgr = load_raw(self._file_path, w, h, fmt)
         except Exception as e:
             QMessageBox.critical(self, "로딩 오류", str(e))
             return

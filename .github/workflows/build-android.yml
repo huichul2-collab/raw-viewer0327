@@ -32,60 +32,70 @@ jobs:
             build-essential libffi-dev libssl-dev \
             libsqlite3-dev zlib1g-dev libbz2-dev \
             liblzma-dev autoconf libtool pkg-config \
-            cmake libglib2.0-dev python3-pip
+            libltdl-dev cmake libglib2.0-dev \
+            python3-pip python3-setuptools
 
       - name: Set JAVA_HOME
         run: |
           echo "JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))" >> $GITHUB_ENV
 
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('android/buildozer.spec') }}
+
       - name: Cache Buildozer global
         uses: actions/cache@v4
         with:
           path: ~/.buildozer
-          key: buildozer-${{ hashFiles('android/buildozer.spec') }}-v3
+          key: buildozer-global-${{ hashFiles('android/buildozer.spec') }}
 
-      - name: Cache Buildozer android dir
+      - name: Cache Buildozer Android
         uses: actions/cache@v4
         with:
           path: android/.buildozer
-          key: buildozer-android-${{ hashFiles('android/buildozer.spec') }}-v3
+          key: buildozer-android-${{ hashFiles('android/buildozer.spec') }}
 
       - name: Install Python build tools
         run: |
           pip install --upgrade pip setuptools wheel
-          pip install cython==0.29.33 buildozer==1.5.0
+          pip install cython==0.29.33
+          pip install buildozer==1.5.0
 
-      - name: Pre-accept Android SDK licenses
+      - name: Verify buildozer installation
         run: |
-          mkdir -p ~/.buildozer/android/platform/android-sdk/licenses
-          printf "24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee" \
-            > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
-          printf "84831b9409646a918e30573bab4c9c91346d8abd" \
-            > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-preview-license
-          printf "33b6a2b64607f11b759f320ef9dff4ae5c47d97a" \
-            > ~/.buildozer/android/platform/android-sdk/licenses/google-gdk-license
+          buildozer --version
 
       - name: Build APK
         working-directory: android
         run: |
+          set -o pipefail
           yes | buildozer -v android debug 2>&1 | tee build.log
-          echo "Build exit code: $?"
+          echo "=== LAST 50 LINES OF BUILD LOG ==="
+          tail -50 build.log
 
-      - name: Check APK
+      - name: Verify APK was created
         working-directory: android
         run: |
-          ls -lh bin/*.apk 2>/dev/null && echo "APK found!" || echo "No APK generated"
+          ls -la bin/ 2>/dev/null || { echo "ERROR: bin/ directory not found — APK was not built"; exit 1; }
+          APK=$(find bin -name "*.apk" 2>/dev/null | head -1)
+          if [ -z "$APK" ]; then
+            echo "ERROR: No .apk file found in bin/"
+            exit 1
+          fi
+          echo "APK built successfully: $APK"
+          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: RawViewer-debug
           path: android/bin/*.apk
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
 
-      - name: Upload build log
+      - name: Upload build log (always)
         uses: actions/upload-artifact@v4
         if: always()
         with:
